@@ -24,19 +24,19 @@ import select
 GPIO.setmode(GPIO.BCM)
 
 # On/Off Buttons
-BUTTON_0 = 5
+BUTTON_0 = 26
 BUTTON_1 = 6
-BUTTON_2 = 13
+BUTTON_2 = 5
 
 # Configure GPIO Pins To Input Pullup
-GPIO.setup(BUTTON_0, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-GPIO.setup(BUTTON_1, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-GPIO.setup(BUTTON_2, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+GPIO.setup(BUTTON_0, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+GPIO.setup(BUTTON_1, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+GPIO.setup(BUTTON_2, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
 
 # Pins For I2C Mux Address 
-MUX_0 = 23
+MUX_0 = 25
 MUX_1 = 24
-MUX_2 = 25
+MUX_2 = 23
 
 # Configure GPIO Pins To Output
 GPIO.setup(MUX_0, GPIO.OUT)
@@ -51,11 +51,10 @@ BUS = smbus.SMBus(I2C_CHAN)
 DEVICES = 3 
 
 # I2C Mux Addresses
-I2C_0_ADDR = [0, 0, 0] 
-I2C_1_ADDR = [0, 0, 1]
-I2C_2_ADDR = [0, 1, 0]
+CHAN_ARRAY = [0b00000001,0b00000010,0b00000100,0b00001000,0b00010000,0b00100000,0b01000000,0b10000000]
 
 # AT240C device address
+MUX_ADDR = 0x70
 DEV_ADDR = 0x50
 
 # Data adresses being used
@@ -64,8 +63,18 @@ DATA_ADDRS = [0x00, 0x01, 0x02, 0x03]
 # Variable to enable or disable all print statements
 TEST = True
 
+# Find static IP set in dhcpcd.conf file
+with open('/etc/dhcpcd.conf') as fin :
+    lines = fin.readlines()
+line_num = -1
+for k,line in enumerate(lines) :
+	# print(line)
+	if "static ip_address" in line:
+		line_num = k
+TCP_IP = str(lines[line_num].split("=")[-1].replace(" ", "").replace("\n", ""))
+
 # TCP IP configuration settings
-TCP_IP = '192.168.0.169' # Pi IP
+#TCP_IP = '192.168.0.169' # Pi IP
 TCP_PORT = 9999
 BUFFER_SIZE = 1024
 
@@ -204,7 +213,7 @@ class Module(Laser):
 		# self.port = None		# Laser Driver Port
 		self.button_pin = None	# Rasberry PI GPIO Pin
 		self.button_state = True 		# Button Not pressed
-		self.i2c_addr = [0, 0, 0]		# I2C Mux Addr
+		self.i2c_addr = 0b00000001		# I2C Mux Addr
 		
 		return
 		
@@ -225,7 +234,7 @@ class Module(Laser):
 	
 	def update(self):
 		"""Read the state of the button and I2C"""
-		if(self.get_button_state() == False):
+		if(self.get_button_state() == True):
 			if(self.sw_intr_lck == True):
 				# If button to turn on laser is pressed
 				self.set_i2c_mux_and_read()
@@ -259,10 +268,9 @@ class Module(Laser):
 		"""Sets the I2C MUX address and
 		tries to read the value on the AT240C
 		"""
-		# Set GPIO MUX Pins
-		GPIO.output(MUX_0, self.i2c_addr[0])
-		GPIO.output(MUX_1, self.i2c_addr[1])
-		GPIO.output(MUX_2, self.i2c_addr[2])
+		# Set GPIO MUX
+		BUS.write_byte(MUX_ADDR, self.i2c_addr)
+		
 		time.sleep(0.01)
 		
 		# Check if I2C device is connected
@@ -271,6 +279,7 @@ class Module(Laser):
 			
 		except:
 			print("ERROR: No I2C device found for chan {}.".format(self.chan))
+			print(self.i2c_addr)
 			self.hexel_ser = 0
 			return 0
 		
@@ -318,7 +327,7 @@ class Modules:
 		"""initialize object"""
 		self.modules = [] 		# Create empty list for modules
 		self.wd = time.time() 	# Watchdog Timer Start Time
-		self.max_time = 60*5	# Max time before triggering turn-off
+		self.max_time = 10 # 60*5	# Max time before triggering turn-off
 		self.intr_lck = False	# Interlock
 		
 		# Connect Tom's laser driver board
@@ -373,13 +382,13 @@ class Modules:
 					# Find what channel is connected to what
 					if(module.chan == "1"):
 						module.button_pin = BUTTON_0	# Rasberry PI GPIO Pin
-						module.i2c_addr = I2C_0_ADDR 	# I2C Mux Addr
+						module.i2c_addr = CHAN_ARRAY[0]	# I2C Mux Addr
 					elif(module.chan == "2"):
 						module.button_pin = BUTTON_1	# Rasberry PI GPIO Pin
-						module.i2c_addr = I2C_1_ADDR 	# I2C Mux Addr
+						module.i2c_addr = CHAN_ARRAY[1]	# I2C Mux Addr
 					elif(module.chan == "3"):
 						module.button_pin = BUTTON_2	# Rasberry PI GPIO Pin
-						module.i2c_addr = I2C_2_ADDR 	# I2C Mux Addr
+						module.i2c_addr = CHAN_ARRAY[2]	# I2C Mux Addr
 					else:
 						print("ERROR: Module channel listed as {}.".format(module.chan))
 					
@@ -397,15 +406,18 @@ class Modules:
 	
 	def update(self):
 		"""Check button state"""
-		
+		# Check the watchdog timer
 		if(time.time() - self.wd < self.max_time):
-		# TODO: CHECK WATCHDOG TIMER
 		
+			# If the watchdog timer is satisfied, update modules
 			for module in self.modules:
 				module.update()
 				
 		else:
 			# Turn off all devices if watchdog has not been reset
+			if(TEST):
+				print("WD Time Passed")
+			
 			self.turn_all_off()
 		
 		return
@@ -465,6 +477,7 @@ class Modules:
 					print("Waiting for command")
 				
 				if(self.s in readable):
+					
 					# Wait for connection
 					self.conn, addr = self.s.accept()
 					
@@ -472,10 +485,21 @@ class Modules:
 						print ('Connection address:', addr)
 						
 					# Recieve value from PC
-					recv_val = self.conn.recv(BUFFER_SIZE)
+					recv_val = self.conn.recv(BUFFER_SIZE).decode()
 					
-					# TODO: parse true or false from recieved pc command
-					self.set_sw_intr_lck_on_all()
+					if(recv_val == "ON"):
+						if(TEST):
+							print("SW interlock on")
+						
+						# Set the software interlock on
+						self.set_sw_intr_lck_on_all()
+						
+					else:
+						if(TEST):
+							print("SW interlock off")
+							
+						# Set the software interlock off
+						self.set_sw_intr_lck_off_all()
 					
 					if(TEST):
 						print("received data:", recv_val)
@@ -521,8 +545,10 @@ def main():
 	# Instantiate modules object
 	ms = Modules()
 
+	# Create thread for TCP/IP communication
 	tcp_ip_thread = threading.Thread(target = ms.recv_and_send_loop)
 	
+	# Start thread
 	tcp_ip_thread.start()
 	
 	try:

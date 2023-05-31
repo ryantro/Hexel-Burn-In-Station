@@ -1,7 +1,32 @@
+
+
+
+
+
+
+
+
+
+import RPi.GPIO as GPIO
 import smbus
 import time
 
+# Configure GPIO
+GPIO.setmode(GPIO.BCM)
 
+# Pins For I2C Mux Address 
+MUX_0 = 25
+MUX_1 = 24
+MUX_2 = 23
+
+# Configure GPIO Pins To Output
+GPIO.setup(MUX_0, GPIO.OUT)
+GPIO.setup(MUX_1, GPIO.OUT)
+GPIO.setup(MUX_2, GPIO.OUT)
+
+MUX_ADDR = 0x70
+M_1 = 0x00
+DEV_ADDR = 0x50
 
 class AT240C:
 	def __init__(self):
@@ -14,7 +39,38 @@ class AT240C:
 		# Initialize I2C (SMBus)
 		self.bus = smbus.SMBus(1)
 		
+		self.i2c_addr = [0, 0, 0]
+		
 		return
+	
+	
+	def check(self, l = [0, 0, 0]):
+		"""Sets the I2C MUX address and
+		tries to read the value on the AT240C
+		"""
+		self.i2c_addr = l
+		
+		# Set GPIO MUX Pins
+		GPIO.output(MUX_0, self.i2c_addr[0])
+		GPIO.output(MUX_1, self.i2c_addr[1])
+		GPIO.output(MUX_2, self.i2c_addr[2])
+		time.sleep(0.01)
+		
+		# Check if I2C device is connected
+		try:
+			print("Write #1")
+			a = self.bus.read_byte_data(MUX_ADDR)
+			print("Write #2")
+			a = self.bus.read_byte_data(DEV_ADDR, 0x00)
+			print(a)
+			print("SUCCESS!")
+			return 1
+			
+		except:
+			print("ERROR: No I2C device found for chan.")
+			#print(self.i2c_addr)
+			self.hexel_ser = 0
+			return 0
 	
 	def write(self, int_val, dev = 0):
 		"""
@@ -69,8 +125,11 @@ class AT240C:
 
 
 
-
-		
-A = AT240C()
-A.write(1712)
-A.read()
+try: 
+	A = AT240C()
+	A.check()
+finally:
+	# Cleanup GPIO
+	GPIO.cleanup()
+#A.write(1712)
+#A.read()
