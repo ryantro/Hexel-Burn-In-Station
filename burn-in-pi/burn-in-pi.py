@@ -18,6 +18,7 @@ import serial
 import socket
 import threading
 import select
+import subprocess
 
 #----------------------------------------------------------------------#
 
@@ -33,16 +34,6 @@ BUTTON_2 = 5
 GPIO.setup(BUTTON_0, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
 GPIO.setup(BUTTON_1, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
 GPIO.setup(BUTTON_2, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
-
-# Pins For I2C Mux Address 
-MUX_0 = 25
-MUX_1 = 24
-MUX_2 = 23
-
-# Configure GPIO Pins To Output
-GPIO.setup(MUX_0, GPIO.OUT)
-GPIO.setup(MUX_1, GPIO.OUT)
-GPIO.setup(MUX_2, GPIO.OUT)
 
 # Intialize I2C Bus
 I2C_CHAN = 1
@@ -140,7 +131,7 @@ class Laser:
 				pass
 		
 		except KeyboardInterrupt:
-			raise KeyboardInterrupt
+			raise KeyboardInterrupt("Keyboard Interrupt triggered in __send() method")
 		
 		except:
 			print("CHAN {} - Failed to send command: ".format(self.chan) + cmd)
@@ -191,11 +182,10 @@ class Laser:
 			print("ERROR: No device connected.")
 			return 0
 	
-	def getCurrent(self) -> str:
+	def getCurrent(self) -> None:
 		"""Get the current across the laser diode"""
 		
 		if(self.connected == True):
-			curr = '0'
 			
 			# Send command
 			cmd = "READI?\r\n"
@@ -207,23 +197,26 @@ class Laser:
 			
 			# Test printing
 			if(TEST_2):
-				print("  Current: [" + curr + "]")
+				print("  CHAN-" + self.chan + " Current: [" + curr + "]")
 			
 			# Set current
-			self.curr = curr	
-			
-			return curr
+			if(self.__is_num(curr)):
+				self.curr = curr
+			else:
+				self.curr = 'None'
+				print("  CHAN-" + self.chan + " ERROR: Could not read current.")
+				raise TomBoardError("Failed to read current.")
 			
 		else:
 			print("ERROR: No device connected.")
-			return '0'
+		
+		return
 
-	def getVoltage(self) -> str:
+	def getVoltage(self) -> None:
 		"""Get the voltage drop accross a hexel"""
 		
 		if(self.connected == True):
-			volt = '0'
-			
+						
 			# Send command
 			cmd = "READLDV?\r\n"
 			resp = self.__send(cmd)
@@ -232,21 +225,32 @@ class Laser:
 			resp = resp.split('?')[-1]
 			volt = resp.replace(' ','').replace('\n','').replace('\r','')
 			
+			# Check formatting
+			if(self.__is_num(volt)):
+				self.volt = volt
+			else:
+				self.volt = 'None'
+				print("  CHAN-" + self.chan + " ERROR: Could not read voltage.")
+				raise TomBoardError("Failed to read current.")
+			
 			# Test printing
 			if(TEST_2):
-				print("  Voltage: [" + volt + "]")
-				
-			
-			self.volt = volt
-				
-			return volt
+				print("  CHAN-" + self.chan + " Voltage: [" + volt + "]")
 			
 		else:
+			# No device connected
 			print("ERROR: No device connected.")
+			self.volt = None
 			
-			self.volt = '0'
-			
-			return '0'
+		return
+	
+	def __is_num(self, num: str) -> bool:
+		"""Check if the input string is a number"""
+		
+		# Replace negative sign and decimal point
+		fnum = num.replace('-','').replace('.','')
+		
+		return fnum.isnumeric()
 	
 	def close(self):
 		"""Close laser driver com port"""
@@ -312,6 +316,8 @@ class Module(Laser):
 	
 	def __init__(self):
 		"""Initialize object"""
+		
+		# Initialize child object
 		Laser.__init__(self)
 		
 		# To report
@@ -327,8 +333,11 @@ class Module(Laser):
 		
 		return
 		
-	def __str__(self):
-		"""String version of object"""
+	def __str__(self) -> str:
+		"""String version of object
+		Returns: 
+			CHAN, BUTTON_STATE, HEXEL_SER, VOLTAGE, CURRENT
+		"""
 		return "{}, {}, {}, {}, {}".format(self.chan, self.button_state, 
 											self.hexel_ser, self.volt, 
 											self.curr)
@@ -336,7 +345,7 @@ class Module(Laser):
 	def get_button_state(self):
 		"""Find what state the button is in"""
 		self.button_state = GPIO.input(self.button_pin)
-		if(False):
+		if(True):
 			print("Button state for chan {}: {}".format(self.chan, 
 											self.button_state))
 			
@@ -349,10 +358,11 @@ class Module(Laser):
 		# TODO: Check for i2c dev ##
 		############################
 		
+		self.set_i2c_mux_and_read()
+		
 		if(self.get_button_state() == True): # and self.hexel_ser != None):
 			if(self.sw_intr_lck == True):
 				# If button to turn on laser is pressed
-				self.set_i2c_mux_and_read()
 				self.laserOn()
 				
 			else:
@@ -366,7 +376,10 @@ class Module(Laser):
 		self.getVoltage()
 		
 		# Update current
-		self.getCurrent()		
+		self.getCurrent()
+		
+		if(TEST):
+			print(self.__str__())		
 			
 		return
 	
@@ -401,8 +414,9 @@ class Module(Laser):
 			BUS.read_byte(DEV_ADDR)
 			
 		except:
-			print("ERROR: No I2C device found for chan {}.".format(self.chan))
-			print(self.i2c_addr)
+			if(TEST_2):
+				# print("WARNING: No I2C device found for chan {}.".format(self.chan))
+				pass
 			self.hexel_ser = None
 			return 0
 		
@@ -430,7 +444,7 @@ class Module(Laser):
 			return val
 			
 		except:
-			print("ERROR: Failed to read I2C device for chan {}.".format(self.chan))
+			# print("WARNING: Failed to read I2C device for chan {}.".format(self.chan))
 			self.hexel_ser = None
 			return 0
 		
@@ -450,13 +464,16 @@ class Modules:
 	
 	def __init__(self):
 		"""initialize object"""
-		self.modules = [] 		# Create empty list for modules
-		self.wd = time.time() 	# Watchdog Timer Start Time
+		self.modules = [] 			# Create empty list for modules
+		self.wd = time.time() 		# Watchdog Timer Start Time
 		self.max_time = 60*60*15	# Max time before triggering turn-off
-		self.intr_lck = False	# Interlock
+		self.intr_lck = False		# Interlock
+		self.lds_connected = False	# Variable to indicated if lds are connected
+		self.eth_connected = False  # Variable to indicate of ethernet is connected 
 		
 		# Connect Tom's laser driver board
-		self.connect_ports()	
+		# self.connect_ports()	
+		# ^ Changed this to be called by above method
 		
 		# TCP/IP communication setup
 		self.s = None
@@ -464,8 +481,11 @@ class Modules:
 		return
 	
 	# Finds all ports with the ttyACM label	
-	def connect_ports(self):
+	def connect_ports(self) -> None:
 		"""Connect to all of Tom's laser driver boards"""
+		
+		# Create empty list for modules
+		self.modules = []
 		
 		# Initialize seen_devices at 0
 		seen_devices = 0
@@ -516,6 +536,7 @@ class Modules:
 						module.i2c_addr = CHAN_ARRAY[2]	# I2C Mux Addr
 					else:
 						print("ERROR: Module channel listed as {}.".format(module.chan))
+						break
 					
 					# Attach object to current current object in for of a list
 					self.modules.append(module)
@@ -524,10 +545,17 @@ class Modules:
 				print("ERROR: Could not connect to port {}".format(port))
 				pass	
 		
+		# Check length of module list
+		if(len(self.modules) != 3):
+			raise TomBoardError("TomBoardError: Only connected to {} out of boards.".format(len(self.modules)))
+		
 		# Sort the object list by laser driver channel
 		self.modules.sort(key = lambda x: x.chan)
-				
-		return
+		
+		# Indicate that laser drivers are all conncted
+		self.lds_connected = True
+		
+		return None
 	
 	def update(self):
 		"""Check button state"""
@@ -585,27 +613,56 @@ class Modules:
 	
 	def __str__(self):
 		"""Return data in string format"""
-		ret_str = []
-		for module in self.modules:
-			ret_str.append(str(module))
-		
-		return "\n".join(ret_str)
+		if(len(self.modules) != 0):
+			ret_str = []
+			for module in self.modules:
+				ret_str.append(str(module))
+			return "\n".join(ret_str)
+		else:
+			# This condition is hit if communication is never established
+			# with Tom's laser driver board.
+			line = "None, None, None, None, None"
+			ret_str = [line, line, line]
+			return "\n".join(ret_str)
 
 	def recv_and_send_loop(self):
 		"""Recieve data from the main PC and send back status"""
 		
-		# Create and setup socket
+		# Setup socket
 		self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 		self.s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-		self.s.bind((TCP_IP, TCP_PORT))
-		self.s.listen(1)
+		
+		while(self.eth_connected == False):
+			try:
+				# Bind socket
+				self.s.bind((TCP_IP, TCP_PORT))
+				self.s.listen(1)
+				self.eth_connected = True
+				
+			except OSError as e:
+				print(e)
+				print("Failed to establish ethernet connection, trying again...")
+				self.eth_connected = False
+				time.sleep(1)
+					
+			except Exception as e:
+				# CAtch all
+				print(e)
+				print("fdsafdsafdsafdsa")
+				try:
+					# Close the socket
+					self.s.close()
+				except:
+					pass
+					
+				return
 		
 		while(True):
 			try:
 				# Create a waitable object with a timeout of 1 second
 				readable, _, _ = select.select([self.s], [], [], 1.0)
 				
-				if(TEST):
+				if(TEST_2):
 					print("Waiting for command")
 				
 				if(self.s in readable):
@@ -613,7 +670,7 @@ class Modules:
 					# Wait for connection
 					self.conn, addr = self.s.accept()
 					
-					if(TEST):
+					if(TEST_2):
 						print ('Connection address:', addr)
 						
 					# Recieve value from PC
@@ -621,8 +678,7 @@ class Modules:
 					
 					if("ON" in recv_val):
 						curr_set = recv_val.split(" ")[-1]
-						if(TEST):
-							print("SW interlock on")
+						if(TEST_2):
 							print("Current set point set to {} A".format(curr_set))
 						
 						# Set the software interlock on
@@ -638,7 +694,7 @@ class Modules:
 						# Set the software interlock off
 						self.set_sw_intr_lck_off_all()
 					
-					if(TEST):
+					if(TEST_2):
 						print("received data:", recv_val)
 					
 					# Send out status update with latest data
@@ -646,10 +702,11 @@ class Modules:
 					self.conn.send(data)  			# Send via TCP/IP
 					
 					# Set new watchdog start time
-					self.wd = time.time()
-					
+					self.wd = time.time()				
+			
 			except Exception as e:
 				# Close TCP/IP connection
+				print("432132143214321432143214321/nfdsafdsafdsafdsafdsafa")
 				print(e)
 				
 				# Exit loop				 
@@ -664,6 +721,27 @@ class Modules:
 		
 		return
 
+	def reset_usb(self) -> None:
+		"""Turn on and off all USB connections and re-connect to laser drivers"""
+		
+		# Mark connected as false
+		self.lds_connected = False
+		
+		# Try to close all connections
+		self.close_all()
+		
+		# Call bash script to restart all usb devices 
+		print(subprocess.run(["./usb-reset.bash"], shell=True))
+		
+		# Give some time for devices to re-initialize
+		print("Sleeping 15 seconds...")
+		time.sleep(15)
+		
+		# Re-Connect to all the ports
+		self.connect_ports()
+		
+		return None
+
 	def close_all(self):
 		"""Close all serial ports"""
 		for module in self.modules:
@@ -676,33 +754,75 @@ class Modules:
 				
 #----------------------------------------------------------------------#		
 
+class TomBoardError(Exception):
+	"""Exception to handle errors relating to poor firmware on Tom's 
+	laser driver board"""
+	pass
+
+#----------------------------------------------------------------------#	
+
 def main():
 	"""Method to run the main program"""
 	# Instantiate modules object
-	ms = Modules()
-
-	if(TEST):
-		print("Enabling all interlocks.")
-		ms.set_sw_intr_lck_on_all()
-	
-	# Set all currents to 0
-	ms.set_all_currents('0')
+	ms = Modules()	
 
 	# Create thread for TCP/IP communication
 	tcp_ip_thread = threading.Thread(target = ms.recv_and_send_loop)
 	
 	# Start thread
 	tcp_ip_thread.start()
-	
+		
 	try:
 		# Update loop
-		while(True):
-			ms.update()
-			time.sleep(0.1)
+		ms.connect_ports()
+		
+	except TomBoardError:
+		ms.lds_connected = False
+		while(ms.lds_connected == False):
+			try:
+				ms.reset_usb()
+				
+			except TomBoardError as e:
+				print(e)
+				print("---------------------------------------------")
+				pass
+				
+	try:
+		if(ms.lds_connected):
+			# Set all currents to 0
+			ms.set_all_currents('0')
 			
+			if(TEST):
+				print("Enabling all interlocks.")
+				ms.set_sw_intr_lck_on_all()
+			
+			# Loop to handle updating states of laser drivers
+			while(True):
+				
+				try:
+					ms.update()
+					time.sleep(0.1)
+					
+				except TomBoardError as e:
+					ms.lds_connected = False
+					while(ms.lds_connected == False):
+						# Try to reset usb and reconnect to Tom's board
+						try:
+							ms.reset_usb()
+							if(TEST):
+								print("Enabling all interlocks.")
+								ms.set_sw_intr_lck_on_all()
+							
+						except TomBoardError as e:
+							print(e)
+							print("---------------------------------------------")
+							pass
+					
+					# ms.reset_usb()
+	
 	except KeyboardInterrupt:
 		print("\n\nKeyboard interrupt triggered!\nClosing program.\n")
-		ms.s.close()
+		# ms.s.close()
 		print("Socket closed.")
 		
 	except Exception as e: 
@@ -712,7 +832,9 @@ def main():
 	finally:
 		# Shut down the socket
 		ms.set_all_currents('0')
-		ms.s.close()
+		
+		if(ms.s != None):
+			ms.s.close()
 		
 		if(tcp_ip_thread.is_alive()):
 			if(TEST):
