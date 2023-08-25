@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 __author__ = "Ryan Robinson"
-__version__ = "1.0.1"
+__version__ = "1.0.4"
 __maintainer__ = "Ryan Robinson"
 __email__ = "ryan.robinson@nuburu.net"
 __status__ = "Production"
@@ -59,12 +59,13 @@ DEV_ADDR = 0x50
 DATA_ADDRS = [0x00, 0x01, 0x02, 0x03]
 
 # Variable to enable or disable all print statements
-TEST = True
-TEST_2 = False
+TEST = True		# Print only certain things
+TEST_2 = False	# Print all things
 
 # Find static IP set in dhcpcd.conf file
 with open('/etc/dhcpcd.conf') as fin:
 	lines = fin.readlines()
+
 line_num = -1
 for k, line in enumerate(lines):
 	# print(line)
@@ -80,8 +81,8 @@ BUFFER_SIZE = 1024
 # SETPOINTS
 CURRENT_SET = 3.5
 
-# MAXIMUM ATTEMPTS
-ATTEMPTS = 2
+# MAXIMUM ATTEMPTS TO COM WITH BOARD
+ATTEMPTS = 3
 
 
 # ----------------------------------------------------------------------#
@@ -138,7 +139,7 @@ class Laser:
 			self.ser.reset_input_buffer()
 
 			# Test printing
-			if (TEST_2):
+			if TEST:
 				print("CHAN {} - Sending: ".format(self.chan) + cmd.replace('\r\n', ''))
 
 			# Encode and send command
@@ -172,7 +173,7 @@ class Laser:
 						print(resp)
 
 			# For finding end characters
-			if TEST_2:
+			if TEST:
 				print(resp)
 
 			# Decode the response
@@ -212,6 +213,7 @@ class Laser:
 			# Get the channel
 			self.findChan()
 			print("Connected to laser on channel {}.".format(self.chan))
+
 		except:
 			self.connected = False
 
@@ -246,10 +248,6 @@ class Laser:
 		"""Get the current across the laser diode"""
 
 		# TODO: Wait for Tom to implement current get command
-
-		return None
-
-		"""
 		if self.connected == True:
 
 			# Send command
@@ -262,7 +260,8 @@ class Laser:
 
 			# Test printing
 			if (TEST_2):
-				print("  CHAN-" + self.chan + " Current: [" + curr + "]")
+				print("Getting current...")
+				print(resp)
 
 			# Set current
 			if (self.__is_num(curr)):
@@ -276,7 +275,7 @@ class Laser:
 			print("ERROR: No device connected.")
 			
 		return None
-		"""
+
 
 	def getVoltage(self, attempt=0) -> None:
 		"""Get the voltage drop accross a hexel"""
@@ -314,7 +313,7 @@ class Laser:
 					self.getVoltage(attempt=attempt + 1)
 
 			# Test printing
-			if (TEST_2):
+			if TEST_2:
 				print("  CHAN-" + self.chan + " Voltage: [" + volt + "]")
 
 		else:
@@ -346,6 +345,10 @@ class Laser:
 		# Turn the laser off
 		try:
 			self.laserOff()
+
+		except TomBoardError:
+			pass
+
 		except:
 			pass
 
@@ -355,7 +358,7 @@ class Laser:
 		except:
 			print("Failed to close laser driver for chan {}.".format(self.chan))
 
-	def laserOn(self):
+	def laserOn(self, attempt=0):
 		"""If the laser is off, turn it on"""
 
 		if (self.curr_set == 'None'):
@@ -365,7 +368,7 @@ class Laser:
 		elif self.curr != self.curr_set and self.sw_intr_lck == True:
 
 			# Till Tom's get current command is implimented
-			self.curr = self.curr_set
+			# self.curr = self.curr_set
 
 			# Print for testing
 			if TEST_2:
@@ -376,15 +379,23 @@ class Laser:
 
 			# Send command to turn laser on
 			cmd = "SETI {}\r\n".format(self.curr_set)
-			self.__send(cmd, end='OK\r\n')
+			resp = self.__send(cmd, end='OK\r\n')
+
+			# Check for error in setting current
+			if 'ERR' in resp:
+				print("Error in turning laser on...")
+				if attempt >= ATTEMPTS:
+					raise TomBoardError("Failed to set current.")
+				else:
+					self.laserOn(attempt=attempt+1)
 
 		return
 
-	def laserOff(self):
+	def laserOff(self, attempt=0):
 		"""If the laser is on, turn it off"""
 
 		# Till Tom's get current is implimented
-		self.curr = 0.0
+		# self.curr = 0.0
 
 		# Print for testing
 		if (TEST_2):
@@ -395,7 +406,15 @@ class Laser:
 
 		# Send command to turn laser off
 		cmd = "SETI 0\r\n"
-		self.__send(cmd, end='OK\r\n')
+		resp = self.__send(cmd, end='OK\r\n')
+
+		# Check for error in setting current
+		if 'ERR' in resp:
+			print("Error in turning laser off...")
+			if attempt >= ATTEMPTS:
+				raise TomBoardError("Failed to set current.")
+			else:
+				self.laserOff(attempt=attempt + 1)
 
 		return
 
@@ -432,7 +451,7 @@ class Module(Laser):
 		self.button_pin = 'None'  	# Rasberry PI GPIO Pin
 		self.button_state = 0  		# Button Not pressed
 		self.__concurrent = 0 		# Consecutive serial reads
-		self.__c_checks = 1
+		self.__c_checks = 3
 
 		return
 
@@ -456,7 +475,16 @@ class Module(Laser):
 
 	def get_button_state(self):
 		"""Find what state the button is in"""
-		self.button_state = GPIO.input(self.button_pin)
+		try:
+			self.button_state = GPIO.input(self.button_pin)
+
+		except IOError as e:
+			print("ERROR: Failed to get button state.")
+
+		except Exception as e:
+			print("Generic exception hit in read button state:")
+			print(e)
+
 		return self.button_state
 
 	def update(self):
@@ -486,23 +514,27 @@ class Module(Laser):
 
 		# Update current
 		# TODO : Needs to be implimented
-		# self.getCurrent()
+		self.getCurrent()
 
-		if self.chan != '3':
-			print('[' + self.__str__().replace('\n', '') + '], ', end='')
-		else:
-			print('[' + self.__str__() + ']')
+		# Print serial number to console
+
+		# if self.chan != '3':
+		# 	print('[' + self.__str__().replace('\n', '') + '], ', end='')
+		#
+		# else:
+		# 	print('[' + self.__str__() + ']')
+
 
 		return
 
-	def set_sw_intr_lck_on(self):
+	def set_sw_intr_lck_on(self) -> None:
 		"""Turn the software interlock on (enable laser firing)"""
 		# Set software interlock variable to true
 		self.sw_intr_lck = True
 
-		return
+		return None
 
-	def set_sw_intr_lck_off(self):
+	def set_sw_intr_lck_off(self) -> None:
 		"""Turn the software interlock off (disable laser firing)"""
 		# Set software interlock variable to false
 		self.sw_intr_lck = False
@@ -510,7 +542,7 @@ class Module(Laser):
 		# Ensure that the laser is turned off
 		self.laserOff()
 
-		return
+		return None
 
 	def __set_ser(self, hexel_ser) -> None:
 		"""Sets the serial number if it reads the same number multiple times"""
@@ -524,14 +556,22 @@ class Module(Laser):
 
 		return None
 
-	def set_i2c_mux_and_read(self, attempt=0):
-		"""Sets the I2C MUX address and
-		tries to read the value on the AT240C
-		"""
-		# Set GPIO MUX
-		BUS.write_byte(MUX_ADDR, self.i2c_addr)
+	def set_i2c_mux_and_read(self, attempt=0) -> int:
+		"""Sets the I2C MUX address and tries to read the value on the AT240C"""
 
-		time.sleep(0.01)
+		try:
+			# Set GPIO MUX
+			BUS.write_byte(MUX_ADDR, self.i2c_addr)
+			time.sleep(0.01)
+
+		except IOError as e:
+			print("IOError: Encountered IOError in I2C com.")
+			return -1
+
+		except Exception as e:
+			print("Generic exception hit in set_i2c_mux_and_read.")
+			print(e)
+			return -1
 
 		# Check if I2C device is connected
 		try:
@@ -558,8 +598,7 @@ class Module(Laser):
 				shift = 8 * (3 - i)
 				val = (int_list[i] << shift) + val
 
-			# Assign val to hexel serial
-			# self.hexel_ser = val
+			# Set the serial number
 			self.__set_ser(val)
 			return val
 
@@ -567,7 +606,6 @@ class Module(Laser):
 			# print("WARNING: Failed to read I2C device for chan {}.".format(self.chan))
 			# self.hexel_ser = 'None'
 			self.__set_ser('None')
-
 			return 0
 
 		return 0
@@ -623,7 +661,7 @@ class Modules:
 		while (seen_devices != DEVICES):
 
 			# Seen if USB needs to be restarted
-			if (checks > 30):
+			if checks > 30:
 				usb_reset()
 
 			else:
@@ -708,6 +746,13 @@ class Modules:
 			# If the watchdog timer is satisfied, update modules
 			for module in self.modules:
 				module.update()
+
+			if TEST:
+				ret_str = []
+				for module in self.modules:
+					ret_str.append(str(module))
+				pstr = "],[".join(ret_str)
+				print("["+pstr+"]")
 
 		else:
 			# Turn off all devices if watchdog has not been reset
@@ -978,7 +1023,7 @@ def main():
 	# If error is found on Tom's board, loop and reset USB until no errors
 	except TomBoardError:
 		ms.lds_connected = False
-		while (ms.lds_connected == False):
+		while ms.lds_connected == False:
 			try:
 				ms.reset_usb()
 
@@ -990,7 +1035,7 @@ def main():
 
 	# Block for the main update loop
 	try:
-		if (ms.lds_connected):
+		if ms.lds_connected:
 			# Set all currents to 0
 			ms.set_all_currents('0')
 
@@ -1009,14 +1054,14 @@ def main():
 				# If usb connection for Tom's board is found, enter reset loop
 				except TomBoardError as e:
 					ms.lds_connected = False
-					while (ms.lds_connected == False):
+					while ms.lds_connected == False:
 
 						# Try to reset usb and reconnect to Tom's board
 						try:
 							ms.reset_usb()
 
 							# Print for testing
-							if (TEST):
+							if TEST:
 								print("Enabling all interlocks.")
 								ms.set_sw_intr_lck_on_all()
 
@@ -1042,12 +1087,12 @@ def main():
 		ms.set_all_currents('0')
 
 		# If the socket exists, close it
-		if (ms.s != None):
+		if ms.s != None:
 			ms.s.close()
 
 		# If the thread is alive, close it
-		if (tcp_ip_thread.is_alive()):
-			if (TEST):
+		if tcp_ip_thread.is_alive():
+			if TEST:
 				print("TCP/IP thread alive...")
 				print("Joining thread...")
 
@@ -1055,7 +1100,7 @@ def main():
 			tcp_ip_thread.join()
 
 			# Print statement for testing
-			if (TEST):
+			if TEST:
 				print("Thread succesfully joined.")
 
 	# Close all laser driver connections
